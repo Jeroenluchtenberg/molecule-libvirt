@@ -135,6 +135,8 @@
         label: "{{ item.name }}"
       when: item.bridge_name is not defined
 
+    # The downloaded cloud images in the image cache are deliberately kept so
+    # a subsequent `molecule create` does not have to download them again.
     - name: Remove vm image(s)
       ansible.builtin.file:
         path: "{{ libvirt_default_image_path }}/{{ item.name }}.qcow2"
@@ -147,15 +149,6 @@
     - name: Remove cloud-init iso image(s)
       ansible.builtin.file:
         path: "{{ libvirt_default_image_path }}/{{ item.name }}-cloud-init.iso"
-        state: absent
-      loop: "{{ molecule_yml.platforms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      delegate_to: "{{ item.libvirt_host if item.libvirt_host is defined else 'localhost' }}"
-
-    - name: Remove hidden expanded info file
-      ansible.builtin.file:
-        path: "{{ libvirt_default_image_path }}/.{{ item.name }}-expanded"
         state: absent
       loop: "{{ molecule_yml.platforms }}"
       loop_control:

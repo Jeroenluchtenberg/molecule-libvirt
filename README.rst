@@ -35,7 +35,7 @@ Requirements
 * Ansible >= 2.16
 * A working libvirt/QEMU/KVM setup on the host
 * ``libvirt-python`` (system package or built from source with ``pkg-config`` and libvirt headers)
-* ``virt-resize`` from ``guestfs-tools`` (for disk resizing)
+* ``qemu-img`` (from ``qemu-utils``/``qemu-img``, for disk resizing)
 
 Required Ansible collections (installed automatically via ``test_requirements.yml``):
 
@@ -129,6 +129,19 @@ Optional
 ``disk_size``
    Disk size (qemu-img format). Default: **15G**.
 
+   The image is grown with ``qemu-img resize`` and the guest's root partition
+   and filesystem are expanded on first boot by cloud-init's ``growpart``.
+   The disk is only ever grown: a ``disk_size`` smaller than the cloud image's
+   own virtual size is ignored.
+
+``image_cache_path``
+   Directory where downloaded cloud images are cached. Default:
+   **~/.cache/molecule-libvirt/images** (override globally with the
+   ``MOLECULE_LIBVIRT_IMAGE_CACHE`` environment variable).
+
+``image_cache_force_update``
+   Re-download the image even when it is already cached. Default: **false**.
+
 ``ssh_port``
    SSH port on the guest. Default: **22**.
 
@@ -147,9 +160,6 @@ Optional
    * RHEL/Fedora: **qemu** (default)
    * Debian/Ubuntu: **libvirt-qemu**
    * NixOS: **root**
-
-``image_volume``
-   Partition to expand with virt-resize. Default: **/dev/sda1**.
 
 ``network_name``
    Use an existing libvirt network instead of creating a molecule-managed one.
@@ -170,6 +180,27 @@ These apply when molecule manages its own network (no ``network_name`` or ``brid
 
 ``molecule_network_cidr``
    IP range for the molecule network. Default: **10.10.10.0/24**.
+
+.. _image-cache:
+
+Image Cache
+===========
+
+Cloud images are downloaded once into a shared cache
+(``~/.cache/molecule-libvirt/images`` by default) and copied from there into
+each VM disk. ``molecule destroy`` removes the VM disks but leaves the cache
+alone, so recreating an instance does not re-download the image.
+
+The cache is keyed on the image URL, so different platforms and scenarios
+share an entry when they use the same URL. To refresh an image that is
+published under a moving URL (``.../latest/...``, ``.../current/...``), set
+``image_cache_force_update: true`` on the platform, or simply delete the
+cached file.
+
+.. code-block:: bash
+
+   # drop the whole cache
+   rm -rf ~/.cache/molecule-libvirt/images
 
 .. _documentation:
 

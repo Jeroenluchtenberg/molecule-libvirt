@@ -16,6 +16,10 @@
     libvirt_vm_arch: "x86_64"
     libvirt_uri: "qemu:///system"
     image_url: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+    libvirt_image_cache_path: >-
+      {{ lookup('env', 'MOLECULE_LIBVIRT_IMAGE_CACHE') |
+      default(user_home_directory + '/.cache/molecule-libvirt/images', true) }}
+    image_cache_force_update: false
     default_disk_size: "15G"
     default_memory_size: "1"
     default_vcpu: "1"
@@ -87,12 +91,71 @@
         label: "{{ item.name }}"
       when: (item.network_name is not defined) and (item.bridge_name is not defined)
 
-    - name: Get qcow2 image
-      ansible.builtin.get_url:
-        url: "{{ item.image_url | default(image_url) }}"
-        dest: "{{ libvirt_default_image_path }}/{{ item.name }}.qcow2"
-        mode: "0660"
+    - name: Ensure image cache folder exists
+      ansible.builtin.file:
+        path: "{{ item.image_cache_path | default(libvirt_image_cache_path) }}"
+        state: directory
+        mode: "0755"
       loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
+
+    - name: Get qcow2 image into the image cache
+      ansible.builtin.get_url:
+        url: "{{ url }}"
+        dest: "{{ item.image_cache_path | default(libvirt_image_cache_path) }}/{{ cached_image_name }}"
+        mode: "0644"
+        force: "{{ item.image_cache_force_update | default(image_cache_force_update) | bool }}"
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
+      vars:
+        url: "{{ item.image_url | default(image_url) }}"
+        cached_image_name: >-
+          {{ (url | hash('sha256'))[:12] }}-{{ (url | urlsplit('path') | basename) | default('image.qcow2', true) }}
+
+    # Images are only ever built for platforms that do not have one yet: once a
+    # domain has been started libvirt chowns its disk to the qemu user, which
+    # leaves it unreadable for us on a subsequent `molecule create`.
+    - name: Check for existing vm image(s)
+      ansible.builtin.stat:
+        path: "{{ libvirt_default_image_path }}/{{ item.name }}.qcow2"
+        get_attributes: false
+        get_checksum: false
+        get_mime: false
+      register: vm_image_stat
+      loop: "{{ molecule_yml.platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
+
+    - name: Select the platform(s) that still need a vm image
+      ansible.builtin.set_fact:
+        new_image_platforms: "{{ vm_image_stat.results | rejectattr('stat.exists') | map(attribute='item') | list }}"
+
+    - name: Create vm image(s) from the cached image
+      ansible.builtin.command:
+        cmd: >-
+          cp --reflink=auto
+          {{ item.image_cache_path | default(libvirt_image_cache_path) }}/{{ cached_image_name }}
+          {{ libvirt_default_image_path }}/{{ item.name }}.qcow2
+        creates: "{{ libvirt_default_image_path }}/{{ item.name }}.qcow2"
+      loop: "{{ new_image_platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
+      vars:
+        url: "{{ item.image_url | default(image_url) }}"
+        cached_image_name: >-
+          {{ (url | hash('sha256'))[:12] }}-{{ (url | urlsplit('path') | basename) | default('image.qcow2', true) }}
+
+    - name: Set permissions on vm image(s)
+      ansible.builtin.file:
+        path: "{{ libvirt_default_image_path }}/{{ item.name }}.qcow2"
+        mode: "0660"
+      loop: "{{ new_image_platforms }}"
       loop_control:
         label: "{{ item.name }}"
       delegate_to: "{{ item.libvirt_host | default('localhost') }}"
@@ -158,44 +221,33 @@
         label: "{{ item.name }}"
       delegate_to: "{{ item.libvirt_host | default('localhost') }}"
 
-    - name: Create an image shell with the desired size
+    - name: Get current virtual size of vm image(s)
+      ansible.builtin.command:
+        cmd: "qemu-img info --output=json {{ libvirt_default_image_path }}/{{ item.name }}.qcow2"
+      changed_when: false
+      register: vm_image_info
+      loop: "{{ new_image_platforms }}"
+      loop_control:
+        label: "{{ item.name }}"
+      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
+
+    # The guest root partition and filesystem are grown to match on first boot
+    # by the cloud-init growpart/resize_rootfs config in user-data.j2.
+    - name: Grow vm image(s) to the requested disk size
       ansible.builtin.command:
         cmd: >-
-          qemu-img create -f qcow2 -o preallocation=metadata
-          {{ item.name }}-temp.qcow2
-          {{ item.disk_size | default(default_disk_size) }}
-        chdir: "{{ libvirt_default_image_path }}"
-      environment:
-        LIBGUESTFS_BACKEND: direct
+          qemu-img resize
+          {{ libvirt_default_image_path }}/{{ item.item.name }}.qcow2
+          {{ item.item.disk_size | default(default_disk_size) }}
       changed_when: true
-      loop: "{{ molecule_yml.platforms }}"
+      loop: "{{ vm_image_info.results }}"
       loop_control:
-        label: "{{ item.name }}"
-      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
-
-    - name: Expand original image on the new sized volume
-      ansible.builtin.shell: |
-        set -e
-        umask 0002
-        virt-resize --quiet --expand {{ item.image_volume | default('/dev/sda1') }} {{ item.name }}.qcow2 {{ item.name }}-temp.qcow2
-        touch "{{ libvirt_default_image_path }}/.{{ item.name }}-expanded"
-      args:
-        chdir: "{{ libvirt_default_image_path }}"
-        creates: "{{ libvirt_default_image_path }}/.{{ item.name }}-expanded"
-      loop: "{{ molecule_yml.platforms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      delegate_to: "{{ item.libvirt_host | default('localhost') }}"
-
-    - name: Move temporary file to main image
-      ansible.builtin.command:
-        cmd: "mv {{ item.name }}-temp.qcow2 {{ item.name }}.qcow2"
-        chdir: "{{ libvirt_default_image_path }}"
-      changed_when: true
-      loop: "{{ molecule_yml.platforms }}"
-      loop_control:
-        label: "{{ item.name }}"
-      delegate_to: "{{ item.libvirt_host if item.libvirt_host is defined else 'localhost' }}"
+        label: "{{ item.item.name }}"
+      delegate_to: "{{ item.item.libvirt_host | default('localhost') }}"
+      when: requested_size | int > current_size | int
+      vars:
+        requested_size: "{{ item.item.disk_size | default(default_disk_size) | human_to_bytes }}"
+        current_size: "{{ (item.stdout | from_json)['virtual-size'] }}"
 
     - name: Define vm from xml file
       community.libvirt.virt:

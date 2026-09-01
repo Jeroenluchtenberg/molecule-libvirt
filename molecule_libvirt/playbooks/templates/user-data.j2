@@ -17,6 +17,15 @@ users:
       ssh-authorized-keys:
         - {{ ssh_key.public_key }}
 
+# Grow the root partition/filesystem to fill the disk. The image is resized
+# with `qemu-img resize` at create time, which only changes the virtual disk
+# size; cloud-init is what makes the guest actually use the extra space.
+growpart:
+  mode: auto
+  devices: ['/']
+  ignore_growroot_disabled: false
+resize_rootfs: true
+
 # Configure where output will go
 output:
   all: ">> /var/log/cloud-init.log"
