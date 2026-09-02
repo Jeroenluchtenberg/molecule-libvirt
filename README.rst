@@ -145,8 +145,24 @@ Optional
 ``ssh_port``
    SSH port on the guest. Default: **22**.
 
+``cpu_mode``
+   libvirt CPU mode for the guest. Default: **custom**.
+
+   * ``custom`` -- emulate the model named by ``cpu_model``.
+   * ``host-passthrough`` -- expose the host CPU as-is. Gives the guest every
+     host CPU flag, which is what nested virtualisation (``vmx``/``svm``) and
+     hardware-accelerated workloads need. The domain is no longer migratable
+     to a host with a different CPU, which does not matter for throwaway
+     molecule VMs.
+   * ``host-model`` -- the closest named model libvirt knows to the host CPU.
+     A middle ground: most host flags, still migratable.
+   * ``maximum`` -- everything the hypervisor can offer.
+
+   ``cpu_model`` is only consulted when the mode is ``custom``.
+
 ``cpu_model``
-   CPU model requested by the guest. Default: **qemu64**.
+   CPU model requested by the guest, when ``cpu_mode`` is ``custom``.
+   Default: **qemu64**.
 
 ``arch``
    CPU architecture. Default: **x86_64**.

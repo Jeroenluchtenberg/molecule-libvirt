@@ -23,6 +23,7 @@
     default_disk_size: "15G"
     default_memory_size: "1"
     default_vcpu: "1"
+    default_cpu_mode: "custom"
     default_ssh_port: "22"
     qemu_user: "qemu"
     mac: "52:54:00:ab:cd:"  # first 5 two-digit hexadecimal numbers

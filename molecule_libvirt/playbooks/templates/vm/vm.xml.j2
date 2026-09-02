@@ -20,9 +20,14 @@ or other application using the libvirt API.
     <apic/>
     <vmport state='off'/>
   </features>
+{% set cpu_mode = item.cpu_mode | default(default_cpu_mode) %}
+{% if cpu_mode == 'custom' %}
   <cpu mode='custom' match='exact' check='none'>
     <model fallback='allow'>{{ item.cpu_model | default('qemu64')}}</model>
   </cpu>
+{% else %}
+  <cpu mode='{{ cpu_mode }}'/>
+{% endif %}
   <clock offset='utc'>
     <timer name='rtc' tickpolicy='catchup'/>
     <timer name='pit' tickpolicy='delay'/>
